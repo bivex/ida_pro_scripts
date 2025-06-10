@@ -17,9 +17,7 @@ def set_exit_breakpoints():
         "FatalAppExitA",
         "FatalAppExitW",
         "RtlExitUserProcess",
-        "NtTerminateProcess",
-        "_CxxThrowException",
-        "RaiseException"
+        "NtTerminateProcess"
     ]
     
     print("[+] Setting breakpoints on exit functions...")
@@ -30,128 +28,208 @@ def set_exit_breakpoints():
         
         if func_addr != idaapi.BADADDR:
             # Установить breakpoint
-            if ida_dbg.add_bpt(func_addr):
+            if idc.add_bpt(func_addr):
                 print(f"[+] Breakpoint set at {func_name}: 0x{func_addr:X}")
                 
-                # Установить условие для ExitProcess (проверить код выхода -1)
+                # Для ExitProcess установить условие через другой способ
                 if func_name == "ExitProcess":
-                    # Условие: проверить первый аргумент (RCX) == -1 или 0xFFFFFFFF
-                    condition = "($rcx == 0xFFFFFFFF) || ($rcx == -1)"
-                    ida_dbg.set_bpt_cond(func_addr, condition)
-                    print(f"[+] Condition set for {func_name}: {condition}")
-            else:
-                print(f"[-] Failed to set breakpoint at {func_name}")
+                    # Установить условный breakpoint
+                    condition = "//PYTHON\nGetRegValue('RCX') == 0xFFFFFFFF or GetRegValue('RCX') == 0x80000000 + 0x7FFFFFFF"
+                    bpt = ida_dbg.get_bpt(func_addr)
+                    if bpt:
+                        bpt.condition = condition
+                        if ida_dbg.update_bpt(bpt):
+                            print(f"[+] Condition set for {func_name}")
+                        else:
+                            print(f"[-] Failed to update breakpoint for {func_name}")
+                    else:
+                        print(f"[-] Failed to get breakpoint object for {func_name}")
+                else:
+                    print(f"[-] Failed to set breakpoint at {func_name}")
         else:
             print(f"[-] Function {func_name} not found")
     
     # Дополнительно - поиск по импортам
     print("\n[+] Checking imports...")
-    
-    def check_imports():
-        """Проверить импорты на наличие функций выхода"""
-        nim = idaapi.get_import_module_qty()
-        
-        for i in range(nim):
-            name = idaapi.get_import_module_name(i)
-            if not name:
-                continue
-                
-            def cb(ea, name, ord):
-                if name:
-                    name_lower = name.lower()
-                    if any(exit_func.lower() in name_lower for exit_func in exit_functions):
-                        if ida_dbg.add_bpt(ea):
-                            print(f"[+] Import breakpoint set at {name}: 0x{ea:X}")
-                            
-                            # Условие для ExitProcess
-                            if "exitprocess" in name_lower:
-                                condition = "($rcx == 0xFFFFFFFF) || ($rcx == -1)"
-                                ida_dbg.set_bpt_cond(ea, condition)
-                                print(f"[+] Condition set for import {name}: {condition}")
-                return True
-                
-            idaapi.enum_import_names(i, cb)
-    
     check_imports()
-    
-    print("\n[+] Breakpoints setup complete!")
-    print("[+] Run the program and check debugger when exit code -1 is hit")
 
-def set_custom_exit_bp():
-    """Установить breakpoint на конкретный адрес с условием"""
+def check_imports():
+    """Проверить импорты на наличие функций выхода"""
+    exit_functions = ["exitprocess", "terminateprocess", "exit", "abort", "fatalexit"]
     
-    # Если знаете конкретный адрес где происходит выход
-    target_addr = idc.here()  # Текущий адрес в IDA
-    
-    if target_addr != idaapi.BADADDR:
-        if ida_dbg.add_bpt(target_addr):
-            print(f"[+] Custom breakpoint set at: 0x{target_addr:X}")
+    # Получить все импорты
+    for i in range(idaapi.get_import_module_qty()):
+        module_name = idaapi.get_import_module_name(i)
+        if not module_name:
+            continue
             
-            # Добавить логирование в breakpoint
-            script = '''
-print("[BREAKPOINT HIT] Address: 0x%X" % GetCurrentAddress())
-print("[REGISTERS] RAX: 0x%X, RCX: 0x%X, RDX: 0x%X" % (GetRegValue("RAX"), GetRegValue("RCX"), GetRegValue("RDX")))
-print("[STACK] RSP: 0x%X" % GetRegValue("RSP"))
+        def import_callback(ea, name, ordinal):
+            if name:
+                name_lower = name.lower()
+                if any(exit_func in name_lower for exit_func in exit_functions):
+                    if idc.add_bpt(ea):
+                        print(f"[+] Import breakpoint set at {name}: 0x{ea:X}")
+                        
+                        # Для ExitProcess добавить условие
+                        if "exitprocess" in name_lower:
+                            condition = "//PYTHON\nGetRegValue('RCX') == 0xFFFFFFFF"
+                            bpt = ida_dbg.get_bpt(ea)
+                            if bpt:
+                                bpt.condition = condition
+                                if ida_dbg.update_bpt(bpt):
+                                    print(f"[+] Condition set for import {name}")
+                                else:
+                                    print(f"[-] Failed to update breakpoint for import {name}")
+                            else:
+                                print(f"[-] Failed to get breakpoint object for import {name}")
+            return True
+            
+        idaapi.enum_import_names(i, import_callback)
 
-# Показать стек вызовов
-import ida_dbg
-import idautils
-
-def print_call_stack():
-    print("[CALL STACK]")
-    for i, frame in enumerate(idautils.Threads()):
-        if i > 10:  # Ограничить вывод
-            break
-        print(f"Frame {i}: 0x{frame:X}")
-
-print_call_stack()
-'''
-            ida_dbg.set_bpt_cond(target_addr, script)
-
-def monitor_specific_function():
-    """Мониторинг конкретной функции"""
+def set_custom_monitoring():
+    """Установить мониторинг на конкретные адреса"""
     
-    # Адрес функции sub_7FF776A6D950 (замените на актуальный)
-    func_addr = 0x7FF776A6D950  # Ваша функция деструктора
+    # Адрес функции деструктора
+    destructor_addr = 0x7FF776A6D950  # Замените на актуальный адрес
     
-    if ida_dbg.add_bpt(func_addr):
-        print(f"[+] Monitoring function at: 0x{func_addr:X}")
+    if idc.add_bpt(destructor_addr):
+        print(f"[+] Destructor breakpoint set at: 0x{destructor_addr:X}")
         
-        # Скрипт для логирования
-        monitor_script = '''
-print("[DESTRUCTOR CALLED] Address: 0x%X" % GetCurrentAddress())
-print("[ARG] Block pointer (RCX): 0x%X" % GetRegValue("RCX"))
-
-# Проверить Block[7]
-block_ptr = GetRegValue("RCX")
-if block_ptr != 0:
-    try:
-        obj_ptr = Qword(block_ptr + 0x38)  # Block[7]
-        print("[OBJECT] Block[7] pointer: 0x%X" % obj_ptr)
-    except:
-        print("[ERROR] Cannot read Block[7]")
+        # Условие для логирования
+        log_condition = '''//PYTHON
+import idc
+print("[DESTRUCTOR HIT] RCX (Block): 0x%X" % idc.get_reg_value("RCX"))
+print("[STACK] RSP: 0x%X" % idc.get_reg_value("RSP"))
+False  # Всегда продолжать выполнение
 '''
-        ida_dbg.set_bpt_cond(func_addr, monitor_script)
+        bpt = ida_dbg.get_bpt(destructor_addr)
+        if bpt:
+            bpt.condition = log_condition
+            if ida_dbg.update_bpt(bpt):
+                print(f"[+] Condition set for destructor")
+            else:
+                print(f"[-] Failed to update breakpoint for destructor")
+        else:
+            print(f"[-] Failed to get breakpoint object for destructor")
 
-# Основная функция
+def find_exit_calls():
+    """Найти все вызовы функций выхода в коде"""
+    
+    print("[+] Searching for exit function calls...")
+    
+    # Поиск по всему сегменту кода
+    start_ea = idc.get_segm_start(idc.here())
+    end_ea = idc.get_segm_end(idc.here())
+    
+    exit_patterns = [
+        "ExitProcess",
+        "TerminateProcess",
+        "exit",
+        "abort"
+    ]
+    
+    current_ea = start_ea
+    while current_ea < end_ea:
+        # Проверить, есть ли вызов функции
+        if idc.print_insn_mnem(current_ea) == "call":
+            # Получить операнд вызова
+            operand = idc.print_operand(current_ea, 0)
+            
+            # Проверить, содержит ли имя функции выхода
+            for pattern in exit_patterns:
+                if pattern.lower() in operand.lower():
+                    print(f"[+] Found {pattern} call at 0x{current_ea:X}")
+                    
+                    # Установить breakpoint
+                    if idc.add_bpt(current_ea):
+                        print(f"[+] Breakpoint set at call site: 0x{current_ea:X}")
+        
+        current_ea = idc.next_head(current_ea)
+
+def monitor_stack_and_exit():
+    """Альтернативный способ мониторинга через трассировку стека"""
+    
+    print("[+] Setting up stack monitoring...")
+    
+    # Найти все функции с "exit" в имени
+    for func_ea in idautils.Functions():
+        func_name = idc.get_func_name(func_ea)
+        if func_name and "exit" in func_name.lower():
+            if idc.add_bpt(func_ea):
+                print(f"[+] Stack monitor BP at {func_name}: 0x{func_ea:X}")
+
+def quick_setup():
+    """Быстрая настройка для отладки"""
+    
+    print("=== QUICK EXIT MONITORING SETUP ===")
+    
+    # 1. ExitProcess
+    exit_addr = idc.get_name_ea_simple("ExitProcess")
+    if exit_addr != idaapi.BADADDR:
+        idc.add_bpt(exit_addr)
+        # Простое условие
+        condition = "//PYTHON\nprint('ExitProcess called with code:', hex(idc.get_reg_value('RCX'))); False"
+        bpt = ida_dbg.get_bpt(exit_addr)
+        if bpt:
+            bpt.condition = condition
+            if ida_dbg.update_bpt(bpt):
+                print(f"[+] ExitProcess monitor at 0x{exit_addr:X}")
+            else:
+                print(f"[-] Failed to update breakpoint for ExitProcess")
+        else:
+            print(f"[-] Failed to get breakpoint object for ExitProcess")
+    
+    # 2. TerminateProcess  
+    term_addr = idc.get_name_ea_simple("TerminateProcess")
+    if term_addr != idaapi.BADADDR:
+        idc.add_bpt(term_addr)
+        print(f"[+] TerminateProcess monitor at 0x{term_addr:X}")
+    
+    # 3. Функция деструктора
+    current_addr = idc.here()
+    if current_addr != idaapi.BADADDR:
+        idc.add_bpt(current_addr)
+        print(f"[+] Current address monitor at 0x{current_addr:X}")
+
 def main():
     """Главная функция скрипта"""
     
-    if not ida_dbg.is_debugger_on():
-        print("[-] Debugger is not active. Please start debugging first.")
-        return
+    print("=== EXIT CODE -1 MONITOR (IDA 9.1) ===")
     
-    print("=== EXIT CODE -1 MONITOR ===")
-    
-    # Установить все breakpoint'ы
-    set_exit_breakpoints()
-    
-    # Мониторинг конкретной функции (опционально)
-    # monitor_specific_function()
-    
-    print("\n[+] Script completed. Start/continue execution to monitor exits.")
-    print("[+] When breakpoint hits, check call stack and registers.")
+    try:
+        # Основная настройка
+        set_exit_breakpoints()
+        
+        # Поиск вызовов в коде
+        find_exit_calls()
+        
+        # Быстрая настройка
+        print("\n" + "="*50)
+        quick_setup()
+        
+        print("\n[+] Monitoring setup complete!")
+        print("[+] Start debugging (F9) to monitor exit calls")
+        print("[+] Breakpoints will show exit codes and call stacks")
+        
+    except Exception as e:
+        print(f"[-] Error during setup: {e}")
+        print("[+] Trying quick setup instead...")
+        quick_setup()
 
-# Запуск скрипта
+# Вспомогательные функции для консоли
+def bp_exit():
+    """Быстрая команда для установки BP на ExitProcess"""
+    addr = idc.get_name_ea_simple("ExitProcess")
+    if addr != idaapi.BADADDR:
+        idc.add_bpt(addr)
+        print(f"ExitProcess BP: 0x{addr:X}")
+
+def bp_here():
+    """Установить BP на текущий адрес"""
+    addr = idc.here()
+    idc.add_bpt(addr)
+    print(f"Breakpoint set at: 0x{addr:X}")
+
+# Запуск
 if __name__ == "__main__":
     main()
