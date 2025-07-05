@@ -1,1 +1,1 @@
- [![Hacked with 🐞](https://a.b-b.top/badge.svg?repo=ida_pro_scripts&label=Hacked%20with%20🐞&background_color=9e9d24&background_color2=c0ca33&utm_source=github&utm_medium=readme&utm_campaign=badge)](https://a.b-b.top) 
+ [![Hacked with 🐞](https://a.b-b.top/badge.svg?repo=ida_pro_scripts&label=Hacked&background_color=9e9d24&background_color2=c0ca33&utm_source=github&utm_medium=readme&utm_campaign=badge)](https://a.b-b.top) 
